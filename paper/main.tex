@@ -1,0 +1,296 @@
+\documentclass[preprint,12pt]{elsarticle}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{lineno}
+
+\modulolinenumbers[5]
+
+\journal{Journal of Biomedical Informatics}
+
+\begin{document}
+
+\begin{frontmatter}
+
+\title{When Post-hoc Calibration Helps, Hurts, and Misleads in Clinical Risk Prediction: A Multi-Dataset Investigation}
+
+\author{Siddhardha Nanda}
+\ead{nandasiddhardha@gmail.com}
+\address{Department of Biomedical Engineering, Columbia University, New York, NY, USA}
+
+\begin{abstract}
+Post-hoc calibration is widely recommended for clinical risk prediction models, yet its effects are rarely evaluated systematically across datasets and model families. We conduct a large-scale empirical study comparing three post-hoc calibration methods---Platt scaling, isotonic regression, and beta calibration---across five public clinical datasets (diabetes, heart disease, breast cancer, liver disease, early diabetes; $n=297$--$768$) and six model architectures (logistic regression, decision tree, random forest, gradient boosting, SVM, MLP). Using 10-fold stratified cross-validation with paired $t$-tests ($\alpha=0.05$), we classify each (dataset, model, calibrator) combination as HELPS, HURTS, or NO\_EFFECT on Expected Calibration Error (ECE). Our key finding is that \textbf{post-hoc calibration degrades performance in 14.4\% of cases} ($n=13/90$), with statistically significant increases in ECE. Degradation concentrates in ensemble models (gradient boosting, random forest) on smaller datasets, where isotonic regression and beta calibration overcorrect already-reasonable probability estimates. Isotonic regression helps most often (14/30 cases) but also hurts most often (5/30); Platt scaling is safest (4/30 hurts) but least effective. We further show that AUC and ECE are only moderately anti-correlated ($r=-0.573$, $p<0.001$), confirming that discriminative accuracy is a poor proxy for calibration quality. Based on these findings, we propose a diagnostic decision framework for calibration method selection based on model family and dataset size. Our results argue that post-hoc calibration should never be applied without held-out validation, and that calibration metrics should be co-primary endpoints in clinical ML evaluation. Code: \url{https://github.com/SID-6921/calibration-clinical-prediction}.
+\end{abstract}
+
+\begin{keyword}
+model calibration \sep clinical risk prediction \sep post-hoc calibration \sep expected calibration error \sep reliability diagram \sep machine learning
+\end{keyword}
+
+\end{frontmatter}
+
+\linenumbers
+
+%=============================================================
+\section{Introduction}
+\label{sec:intro}
+%=============================================================
+
+Machine learning models for clinical risk prediction are increasingly deployed in decision support systems, where their predicted probabilities directly influence treatment decisions. A model predicting 70\% risk of sepsis triggers different clinical responses than one predicting 30\%. For this probabilistic guidance to be trustworthy, predicted probabilities must be \emph{calibrated}: a prediction of $p$ should correspond to a true event rate of approximately $p$ \citep{vancalster2019}.
+
+Despite this, the clinical ML literature overwhelmingly evaluates models on discriminative metrics---primarily AUC-ROC---while treating calibration as secondary or optional. When calibration is addressed, post-hoc methods such as Platt scaling \citep{platt1999} and isotonic regression \citep{zadrozny2002} are recommended as general-purpose solutions. The implicit assumption is that post-hoc calibration uniformly improves probability estimates.
+
+This assumption is dangerous. Recent theoretical and empirical work has shown that post-hoc calibration can \emph{degrade} performance under distribution shift \citep{rethinking2024}, and that calibration methods have heterogeneous effects across model families \citep{niculescu2005}. However, no study has systematically characterized when calibration helps versus hurts across the specific conditions of clinical risk prediction: small datasets, moderate class imbalance, and diverse model architectures.
+
+We address this gap with a large-scale empirical study spanning:
+
+\begin{itemize}
+    \item \textbf{5 clinical datasets} covering diabetes, heart disease, breast cancer, liver disease, and early diabetes risk ($n=297$--$768$)
+    \item \textbf{6 model families}: logistic regression, decision tree, random forest, gradient boosting, SVM, and MLP
+    \item \textbf{4 calibration conditions}: uncalibrated, Platt scaling, isotonic regression, and beta calibration
+    \item \textbf{Statistical testing}: paired $t$-tests on 10-fold CV ECE to classify each combination as HELPS, HURTS, or NO\_EFFECT
+\end{itemize}
+
+Our contributions are: (1) quantifying the rate of calibration-induced degradation in clinical settings (14.4\%), (2) identifying which model--calibrator combinations are most vulnerable, (3) proposing a decision framework for calibration method selection, and (4) arguing that calibration metrics should be co-primary endpoints alongside AUC.
+
+%=============================================================
+\section{Related Work}
+\label{sec:related}
+%=============================================================
+
+\subsection{Model Calibration in Clinical Prediction}
+
+\citet{vancalster2019} established calibration as ``the Achilles heel of predictive analytics,'' demonstrating that well-discriminating models can produce dangerously miscalibrated probabilities. They advocated for reliability diagrams and calibration slope as standard reporting. \citet{steyerberg2010} provided complementary evidence that calibration-in-the-large and calibration slope should accompany all clinical prediction model publications.
+
+\subsection{Post-hoc Calibration Methods}
+
+Platt scaling \citep{platt1999} fits a logistic regression on predicted probabilities, assuming a sigmoidal miscalibration function. Isotonic regression \citep{zadrozny2002} uses a non-parametric monotonic function, offering greater flexibility at the cost of overfitting risk. Beta calibration \citep{kull2017} extends Platt scaling by fitting a logistic regression on log-odds and log-probability features, capturing asymmetric miscalibration patterns. \citet{niculescu2005} compared these methods across model families, finding that boosted models tend to push probabilities toward extremes and that isotonic regression can overfit on small calibration sets.
+
+\subsection{When Calibration Fails}
+
+Recent work has identified failure modes of post-hoc calibration. \citet{rethinking2024} showed that under subpopulation shift, post-hoc calibration can degrade ECE to levels worse than uncalibrated baselines. An ICLR 2025 study demonstrated that calibration methods depend heavily on validation data representativeness. However, these studies focus on computer vision benchmarks; the clinical domain---with its small datasets, high stakes, and mixed model families---remains understudied.
+
+\subsection{Multi-Dataset Benchmarks}
+
+Tabular data benchmarks \citep{tableshift2023} have evaluated model robustness across datasets but rarely include calibration metrics. Clinical prediction benchmarks using MIMIC and eICU focus on large-scale EHR data, leaving the common scenario of small, public clinical datasets underexplored.
+
+%=============================================================
+\section{Methods}
+\label{sec:methods}
+%=============================================================
+
+\subsection{Datasets}
+
+We selected five publicly available clinical classification datasets spanning diverse prediction tasks, sample sizes, and class balance (Table~\ref{tab:datasets}).
+
+\begin{table}[htbp]
+\centering
+\caption{Dataset characteristics.}
+\label{tab:datasets}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Dataset} & \textbf{$n$} & \textbf{Features} & \textbf{Prevalence} & \textbf{Source} \\
+\midrule
+Pima Diabetes     & 768 & 8  & 34.9\% & UCI \\
+Cleveland Heart   & 297 & 13 & 46.1\% & UCI \\
+Breast Cancer     & 569 & 30 & 37.3\% & sklearn \\
+Indian Liver      & 579 & 10 & 71.5\% & UCI \\
+Early Diabetes    & 520 & 16 & 61.5\% & UCI \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Models}
+
+We evaluate six models spanning a complexity spectrum:
+
+\begin{enumerate}
+    \item \textbf{Logistic Regression (LR)}: $L_2$-regularized, StandardScaler, 2000 max iterations.
+    \item \textbf{Decision Tree (DT)}: Max depth 5.
+    \item \textbf{Random Forest (RF)}: 200 trees, max depth 8.
+    \item \textbf{Gradient Boosting (GB)}: 150 estimators, max depth 3.
+    \item \textbf{SVM (RBF)}: Radial basis function kernel, Platt-internal probability estimates, StandardScaler.
+    \item \textbf{MLP}: Two hidden layers (64, 32), ReLU, Adam, early stopping, StandardScaler.
+\end{enumerate}
+
+\subsection{Calibration Methods}
+
+\textbf{Platt Scaling}: Logistic regression on predicted probabilities \citep{platt1999}.
+
+\textbf{Isotonic Regression}: Non-parametric monotonic function fit on predicted probabilities \citep{zadrozny2002}.
+
+\textbf{Beta Calibration}: Logistic regression on log-odds and log-probability features, capturing asymmetric miscalibration \citep{kull2017}.
+
+All calibrators are fit on the training fold's predicted probabilities and applied to the test fold, following the standard held-out calibration protocol.
+
+\subsection{Evaluation Protocol}
+
+10-fold stratified cross-validation with fixed seed (42). For each fold, we: (1) train the model on training data, (2) compute predicted probabilities on both train and test sets, (3) fit each calibrator on training probabilities, (4) apply calibrators to test probabilities, (5) compute all metrics.
+
+\subsection{Metrics}
+
+\begin{itemize}
+    \item \textbf{AUC-ROC}: Discrimination ability.
+    \item \textbf{ECE} (Expected Calibration Error, 15 bins): Primary calibration metric.
+    \item \textbf{MCE} (Maximum Calibration Error): Worst-bin calibration.
+    \item \textbf{Brier Score}: Composite metric decomposing into discrimination and calibration.
+    \item \textbf{Log Loss}: Probability quality under log-scoring.
+\end{itemize}
+
+\subsection{Statistical Testing}
+
+For each (dataset, model) pair, we compare ECE across 10 folds between the uncalibrated baseline and each calibrator using a paired $t$-test ($\alpha=0.05$). Each combination is classified as:
+
+\begin{itemize}
+    \item \textbf{HELPS}: Significant ECE decrease ($p<0.05$, negative mean difference)
+    \item \textbf{HURTS}: Significant ECE increase ($p<0.05$, positive mean difference)
+    \item \textbf{NO\_EFFECT}: Non-significant difference ($p \geq 0.05$)
+\end{itemize}
+
+This yields $5 \times 6 \times 3 = 90$ verdict classifications.
+
+%=============================================================
+\section{Results}
+\label{sec:results}
+%=============================================================
+
+\subsection{Overall Verdict Distribution}
+
+Across 90 (dataset, model, calibrator) combinations:
+
+\begin{itemize}
+    \item \textbf{HELPS}: 29 (32.2\%) --- calibration significantly improved ECE
+    \item \textbf{NO\_EFFECT}: 48 (53.3\%) --- no significant change
+    \item \textbf{HURTS}: 13 (14.4\%) --- calibration significantly \emph{worsened} ECE
+\end{itemize}
+
+This means that in nearly one in seven cases, applying post-hoc calibration produced statistically worse probability estimates than the uncalibrated baseline.
+
+\subsection{Effect by Calibration Method}
+
+Figure~\ref{fig:verdict} shows the verdict distribution by calibrator and model family.
+
+\begin{figure*}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/fig2_verdict_summary.png}
+    \caption{Verdict distribution by calibration method (left) and model family (right). Isotonic regression helps most often (14 cases) but also hurts most often (5 cases). Platt scaling is safest.}
+    \label{fig:verdict}
+\end{figure*}
+
+Isotonic regression is the most effective calibrator (14 HELPS) but also the most dangerous (5 HURTS). Platt scaling is safest (4 HURTS) but least effective (6 HELPS). Beta calibration falls between the two (9 HELPS, 4 HURTS).
+
+\subsection{Effect by Model Family}
+
+Ensemble models (gradient boosting, random forest) are most vulnerable to calibration degradation. Gradient boosting shows HURTS in 4 of 15 combinations; random forest in 4 of 15. In contrast, logistic regression and MLP show 0 HURTS cases across all datasets.
+
+This pattern is consistent with \citeauthor{niculescu2005}'s~(\citeyear{niculescu2005}) finding that boosted models push probabilities toward extremes: post-hoc calibration attempts to correct this but overcorrects on small datasets ($n<800$).
+
+\subsection{ECE Landscape}
+
+Figure~\ref{fig:heatmap} shows the ECE heatmap across all experimental conditions. Several patterns emerge:
+
+\begin{figure*}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{figures/fig1_ece_heatmap.png}
+    \caption{ECE heatmap across datasets, models, and calibrators. Darker red indicates worse calibration. Note how gradient boosting and random forest on Pima Diabetes and Indian Liver show increased ECE after calibration (darker cells in Platt/Isotonic/Beta panels compared to Uncalibrated).}
+    \label{fig:heatmap}
+\end{figure*}
+
+\begin{enumerate}
+    \item The Indian Liver dataset shows the most calibration degradation, particularly for ensemble models.
+    \item The Early Diabetes dataset shows the most calibration improvement, particularly for isotonic regression.
+    \item Decision trees are largely unaffected by post-hoc calibration (their discrete leaf probabilities resist monotonic correction).
+\end{enumerate}
+
+\subsection{Discrimination vs.\ Calibration Independence}
+
+Figure~\ref{fig:auc_ece} plots AUC against ECE across all experimental conditions. The correlation is moderate ($r=-0.573$, $p<0.001$), confirming that high AUC does not guarantee low ECE.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/fig4_auc_vs_ece.png}
+    \caption{AUC-ROC vs.\ ECE across all conditions. The moderate anti-correlation ($r=-0.573$) shows that AUC is a poor proxy for calibration quality.}
+    \label{fig:auc_ece}
+\end{figure}
+
+Notably, several high-AUC points ($>0.90$) show ECE values above 0.10, demonstrating that excellent discrimination can coexist with poor calibration---precisely the scenario that leads to overconfident clinical risk scores.
+
+%=============================================================
+\section{Discussion}
+\label{sec:discussion}
+%=============================================================
+
+\subsection{The 14.4\% Problem}
+
+Our central finding---that post-hoc calibration hurts in 14.4\% of cases---challenges the common practice of applying calibration as a universal post-processing step. In clinical settings, this rate is concerning: if one in seven calibration attempts makes probability estimates \emph{worse}, and clinicians trust calibrated probabilities more than raw ones, the net effect on patient safety is ambiguous.
+
+\subsection{Why Calibration Hurts: The Overfitting Hypothesis}
+
+The concentration of HURTS verdicts in ensemble models on small datasets supports an overfitting interpretation. Gradient boosting and random forest produce probability estimates with complex, non-monotonic miscalibration patterns. Isotonic regression, with its $O(n)$ free parameters, can fit these patterns on training data but fails to generalize---particularly when $n<800$.
+
+Platt scaling, with only 2 parameters, is more robust but assumes a sigmoidal miscalibration function that poorly matches ensemble behavior. Beta calibration offers a middle ground but inherits similar overfitting risks on small datasets.
+
+\subsection{Practical Recommendations}
+
+Based on our findings, we propose the following decision framework:
+
+\begin{enumerate}
+    \item \textbf{Always validate}: Never apply calibration without evaluating ECE on held-out data.
+    \item \textbf{Small datasets ($n<1000$)}: Prefer Platt scaling over isotonic regression.
+    \item \textbf{Ensemble models}: Apply calibration cautiously; consider leaving uncalibrated if ECE is already acceptable ($<0.05$).
+    \item \textbf{Report both metrics}: Journals should require ECE (or Brier score) alongside AUC for clinical prediction papers.
+\end{enumerate}
+
+\subsection{Limitations}
+
+\begin{enumerate}
+    \item \textbf{Dataset scope}: All datasets are relatively small ($n<800$). On larger clinical datasets (MIMIC, $n>40{,}000$), isotonic regression's overfitting risk diminishes, and the HURTS rate may be lower. Validating on large-scale EHR data is an important next step.
+    \item \textbf{Single-split calibration}: We fit calibrators on training probabilities. Cross-validated calibration or nested calibration schemes may reduce overfitting but add complexity.
+    \item \textbf{ECE bin sensitivity}: ECE depends on binning strategy (we use 15 equal-width bins). Kernel density-based calibration metrics would provide smoother estimates but are less established.
+    \item \textbf{Distribution shift}: Our study evaluates in-distribution calibration. Under deployment shift (temporal, geographic, demographic), calibration degradation rates may be higher \citep{rethinking2024}.
+\end{enumerate}
+
+%=============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+%=============================================================
+
+We conducted the first systematic multi-dataset investigation of when post-hoc calibration helps, hurts, and has no effect in clinical risk prediction. Our findings challenge the assumption that calibration is universally beneficial:
+
+\begin{enumerate}
+    \item Post-hoc calibration \textbf{significantly degrades} ECE in 14.4\% of (dataset, model, calibrator) combinations.
+    \item Degradation concentrates in \textbf{ensemble models} (gradient boosting, random forest) on \textbf{small datasets} ($n<800$).
+    \item \textbf{Isotonic regression} is the most effective but also most risky calibrator; \textbf{Platt scaling} is safest.
+    \item AUC and ECE are only moderately correlated ($r=-0.573$), confirming that \textbf{discrimination is not a proxy for calibration}.
+\end{enumerate}
+
+We argue that the clinical ML community should: (a) never apply post-hoc calibration without validation, (b) report calibration metrics as co-primary endpoints, and (c) select calibration methods based on model family and dataset size rather than applying a one-size-fits-all approach.
+
+Code and data are available at \url{https://github.com/SID-6921/calibration-clinical-prediction}.
+
+%=============================================================
+\section*{AI Disclosure}
+%=============================================================
+
+Generative AI tools were used during the preparation of this work to assist with literature search, code scaffolding, and prose editing. The author reviewed, verified, and takes full responsibility for all content, experimental design, result interpretation, and scientific claims.
+
+%=============================================================
+\section*{Data Availability}
+%=============================================================
+
+All datasets are publicly available from UCI Machine Learning Repository and scikit-learn. Experiment code and results are available at \url{https://github.com/SID-6921/calibration-clinical-prediction}.
+
+%=============================================================
+\section*{Declaration of Competing Interest}
+%=============================================================
+
+The author declares no competing interests.
+
+%=============================================================
+\bibliographystyle{elsarticle-harv}
+\bibliography{references}
+
+\end{document}
